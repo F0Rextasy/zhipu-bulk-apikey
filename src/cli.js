@@ -63,6 +63,7 @@ const { spawn } = require('child_process');
 
 const ROOT = path.basename(__dirname) === 'src' ? path.resolve(__dirname, '..') : __dirname;
 const KEYS_FILE = path.join(ROOT, 'keys.txt');
+const DEAD_FILE = path.join(ROOT, 'keys-dead.txt');
 const ACCOUNTS_FILE = path.join(ROOT, 'accounts.json');
 const OUT_DIR = path.join(ROOT, 'out');
 
@@ -86,19 +87,20 @@ const has = (name) => argv.includes(`--${name}`) || argv.includes(`-${name}`);
 if (has('help') || has('h')) {
   console.log(`zhipu-bulk-apikey — mint BigModel accounts, one key each, verified by a live chat + tool call.
 
-  node src/cli.js --count 5 --token-cmd "<solver>"   mint
+  node src/cli.js --count 5                          mint (TCaptcha solved automatically)
   node src/cli.js --verify-only                      re-check every key in keys.txt
   node src/cli.js --screen                           test your proxy list against BigModel
   node src/cli.js --help
 
   --count N      accounts to mint                                         [5]
   --model <id>   free model used for the live gate           [glm-4.5-flash]
-  --token-cmd C  TCaptcha solver; placeholders {exit} {url} {tmp}
-  --token-file F solver output file for the ticket JSON
-  --pool <file>  proxy list, one exit per line (env ZHIPU_PROXIES)   [optional]
-
-Requests go through your proxy list when one is provided (--pool / env).
-Without a pool the tool connects directly.`);
+  --auto         solve the TCaptcha with the embedded solver (default)
+  --no-auto      disable the embedded solver
+  --dry          resolve the plan, write nothing (no network, no files)
+Advanced TCaptcha solver wiring (env-only) is described in ADVANCED.md; if Chrome
+is not found, install it once or point CHROME_PATH at it. Requests go through
+your proxy list when one is provided (--pool / env); without a pool the tool
+connects directly.`);
   process.exit(0);
 }
 
@@ -114,6 +116,11 @@ const TOKEN_FILE = arg('token-file', '');
 const MAIL = arg('mail', 'emailnator');
 const VERIFY_ONLY = has('verify-only');
 const SCREEN = has('screen');
+const AUTO = !has('no-auto'); // the embedded solver is the default path (one command)
+const DRY = has('dry'); // resolve the plan, write nothing, send nothing
+/** Lazy require: a checkout without src/solver.js still runs off --token-cmd. */
+let _solver = null;
+const solver = () => (_solver && _solver.solveCaptcha ? _solver : (_solver = require('./solver.js')));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -362,9 +369,15 @@ function codeIn(text) {
 }
 
 // ------------------------------------------------------------------- captcha
+/** The embedded TCaptcha rail (--auto): a ticket/randstr pair straight from the panel's appid. */
+async function autoTicket(exit) {
+  const r = await solver().solveCaptcha({ type: 'tencent', url: `${BASE}/login`, proxy: exit ? exit.line : null, appid: APPID });
+  if (r && r.ticket && r.randstr) return { ticket: String(r.ticket), randstr: String(r.randstr) };
+  throw new Error('the embedded TCaptcha solver (--auto) produced no ticket');
+}
 /** Runs the caller's TCaptcha solver for one account and returns { ticket, randstr }. */
 function tencentTicket(exit) {
-  if (!TOKEN_CMD) throw new Error('--token-cmd is required to mint (see --help): a TCaptcha solver for appid ' + APPID);
+  if (!TOKEN_CMD) return autoTicket(exit);
   const tmp = path.join(OUT_DIR, `captcha-${Date.now().toString(36)}`);
   fs.mkdirSync(tmp, { recursive: true });
   const file = TOKEN_FILE ? TOKEN_FILE.replace(/\{tmp\}/g, tmp) : path.join(tmp, 'ticket.json');
@@ -478,6 +491,11 @@ async function chatGate(exit, key, model = MODEL) {
 
 async function mint() {
   const exits = loadExits();
+  if (DRY) {
+    console.log('dry run — nothing is written and no request is sent.');
+    console.log(`  count ${COUNT} · conc ${CONC} · model ${MODEL} · exits ${exits.filter(Boolean).length || 'direct'} · solver ${AUTO ? 'embedded src/solver.js (--auto)' : 'off (--no-auto)'}`);
+    return;
+  }
   if (SCREEN) return void (await screen(exits));
   const accounts = loadAccounts();
   log(`zhipu · ${COUNT} key(s) · conc ${CONC} · mail ${MAIL} · exits ${exits.filter(Boolean).length || 'direct'} · keys land in keys.txt`);
@@ -515,6 +533,7 @@ async function mint() {
     if (GAP_MS) await sleep(GAP_MS);
   }
   log(`done — ${made}/${COUNT} key(s) written to ${KEYS_FILE}`);
+  console.log(`__MINT_SUMMARY__ ${JSON.stringify({ requested: COUNT, live: made, keysFile: KEYS_FILE, deadFile: DEAD_FILE })}`);
 }
 
 async function verifyOnly() {
@@ -522,17 +541,21 @@ async function verifyOnly() {
   const keys = readKeys();
   if (!keys.length) { console.log(`no keys in ${KEYS_FILE}`); process.exit(0); }
   let live = 0;
+  const dead = [];
   for (let i = 0; i < keys.length; i++) {
     const exit = exits[i % exits.length];
     try {
       const g = await chatGate(exit, keys[i]);
       if (g.ok) live++;
+      else dead.push({ key: keys[i], why: `chat=${g.status}` });
       console.log(`  ${g.ok ? '✔' : '✘'} ${keys[i].slice(0, 8)}… chat=${g.status} tools=${g.tools ? (g.tools.present ? g.tools.names.join('+') : 'none') : '-'}`);
     } catch (e) {
+      dead.push({ key: keys[i], why: String(e.message).slice(0, 60) });
       console.log(`  ✘ ${keys[i].slice(0, 8)}… ${String(e.message).slice(0, 90)}`);
     }
   }
-  console.log(`verify: ${live}/${keys.length} keys live`);
+  fs.writeFileSync(DEAD_FILE, dead.map((d) => `${d.key}\t# ${d.why}`).join('\n') + (dead.length ? '\n' : ''));
+  console.log(`verify: ${live}/${keys.length} keys live — the ${dead.length} dead one(s) are in ${DEAD_FILE}`);
   process.exit(live === keys.length ? 0 : 1);
 }
 

@@ -123,7 +123,7 @@ let _solver = null;
 const solver = () => (_solver && _solver.solveCaptcha ? _solver : (_solver = require('./solver.js')));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-fs.mkdirSync(OUT_DIR, { recursive: true });
+if (!DRY) fs.mkdirSync(OUT_DIR, { recursive: true });
 const log = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...a);
 
 // ------------------------------------------------------------------- proxy

@@ -116,6 +116,25 @@ No browser, no password: the CLI asks its mailbox rail for a fresh address, solv
 
 `src/launcher.js` (same banner as this README) asks for the count, the proxy list file and the verification model, remembers them in `launcher.config.json`, and runs the CLI with the right flags — then offers the 9Router and OmniRoute connectors. `src/connect-9router.js` registers the provider under prefix `zhipu` with `glm-4.5-flash` as the default model.
 
+## 🚀 One command
+
+The captcha is solved for you — one command mints N accounts and keeps only the keys a live chat call verified:
+
+```bash
+npm install                  # once: pulls puppeteer-core
+npm start                    # menu → "1) Mint keys" → "How many keys?" (Enter = 10)
+# or non-interactive:
+node src/cli.js --count N
+```
+
+`--auto` is the default and nothing has to be passed: the embedded `src/solver.js` opens a headed Chrome over the account's own exit and returns the panel's Turnstile token automatically. `--dry` prints the resolved plan and exits with **no file written and no network call**.
+
+> ⚠️ **Terms & account risk.** This is an automation tool, not an account vendor. Bulk sign-ups and key minting are entirely your responsibility: they may breach the provider's Terms of Service and can get addresses, exits or accounts blocked. Use it only on infrastructure you are allowed to automate, and keep the request rate low.
+
+## 🔧 Advanced (optional)
+
+Wiring your own solver, pasting a token by hand or pointing the tool at a specific Chrome are documented in **[ADVANCED.md](ADVANCED.md)**. The common path needs none of it.
+
 ## ✅ Verified working — every key is tested
 
 All of it measured 2026-10-22 on two live keys (`providers/zhipu/keys.txt`, 2 lines — the z.ai account key and a key minted through the CN rail the same day):

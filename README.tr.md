@@ -205,7 +205,7 @@ node src/cli.js --help
 | `--appid ID` | çözücüye verilen TCaptcha appid'i (varsayılan `196026326`) |
 | `--mail <rail>` | `emailnator` · `broker` · `temptf` (varsayılan `emailnator`) |
 | `--pool <file>` | proxy listesi, satır başına bir çıkış (veya ortam değişkeni `ZHIPU_PROXIES`) — isteğe bağlı |
-| `--tries N` | vazgeçmeden önce hesap başına denenen çıkış sayısı (varsayılan `2`) |
+| `--exits N` | vazgeçmeden önce hesap başına denenen çıkış sayısı (varsayılan `6`) |
 | `--timeout MS` | istek başına zaman aşımı (varsayılan `60000`) |
 | `--verify-only` | `keys.txt` içindeki her anahtarı kapıdan yeniden geçir |
 | `--screen` | yalnızca proxy listesini BigModel'e karşı test et |

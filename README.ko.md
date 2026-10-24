@@ -205,7 +205,7 @@ node src/cli.js --help
 | `--appid ID` | 솔버에 전달되는 TCaptcha appid (기본 `196026326`) |
 | `--mail <rail>` | `emailnator` · `broker` · `temptf` (기본 `emailnator`) |
 | `--pool <file>` | 프록시 목록, 한 줄에 하나의 출구 (또는 환경 변수 `ZHIPU_PROXIES`) — 선택 사항 |
-| `--tries N` | 포기하기 전 계정당 시도하는 출구 수 (기본 `2`) |
+| `--exits N` | 포기하기 전 계정당 시도하는 출구 수 (기본 `6`) |
 | `--timeout MS` | 요청당 타임아웃 (기본 `60000`) |
 | `--verify-only` | `keys.txt`의 모든 키를 게이트를 통해 재실행 |
 | `--screen` | BigModel에 대해 프록시 목록만 테스트 |

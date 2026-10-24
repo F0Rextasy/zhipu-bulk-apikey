@@ -204,7 +204,7 @@ node src/cli.js --help
 | `--appid ID` | TCaptcha appid handed to the solver (default `196026326`) |
 | `--mail <rail>` | `emailnator` · `broker` · `temptf` (default `emailnator`) |
 | `--pool <file>` | proxy list, one exit per line (or env `ZHIPU_PROXIES`) — optional |
-| `--tries N` | exits tried per account before giving up (default `2`) |
+| `--exits N` | exits tried per account before giving up (default `6`) |
 | `--timeout MS` | per-request timeout (default `60000`) |
 | `--verify-only` | re-run every key in `keys.txt` through the gate |
 | `--screen` | only test the proxy list against BigModel |

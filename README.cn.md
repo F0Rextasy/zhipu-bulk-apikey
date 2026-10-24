@@ -204,7 +204,7 @@ node src/cli.js --help
 | `--appid ID` | 传给破解器的 TCaptcha appid（默认 `196026326`） |
 | `--mail <rail>` | `emailnator` · `broker` · `temptf`（默认 `emailnator`） |
 | `--pool <file>` | 代理列表，每行一个出口（或环境变量 `ZHIPU_PROXIES`）——可选 |
-| `--tries N` | 每个账户在放弃前尝试的出口数（默认 `2`） |
+| `--exits N` | 每个账户在放弃前尝试的出口数（默认 `6`） |
 | `--timeout MS` | 每请求超时（默认 `60000`） |
 | `--verify-only` | 让 `keys.txt` 中的每个密钥重新通过门槛 |
 | `--screen` | 仅针对 BigModel 测试代理列表 |

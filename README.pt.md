@@ -205,7 +205,7 @@ node src/cli.js --help
 | `--appid ID` | appid do TCaptcha passado ao solver (padrão `196026326`) |
 | `--mail <rail>` | `emailnator` · `broker` · `temptf` (padrão `emailnator`) |
 | `--pool <file>` | lista de proxies, uma saída por linha (ou env `ZHIPU_PROXIES`) — opcional |
-| `--tries N` | saídas tentadas por conta antes de desistir (padrão `2`) |
+| `--exits N` | saídas tentadas por conta antes de desistir (padrão `6`) |
 | `--timeout MS` | timeout por requisição (padrão `60000`) |
 | `--verify-only` | reexecuta toda chave em `keys.txt` pela validação |
 | `--screen` | apenas testa a lista de proxies contra o BigModel |

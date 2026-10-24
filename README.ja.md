@@ -205,7 +205,7 @@ node src/cli.js --help
 | `--appid ID` | ソルバーに渡す TCaptcha appid (デフォルト `196026326`) |
 | `--mail <rail>` | `emailnator` · `broker` · `temptf` (デフォルト `emailnator`) |
 | `--pool <file>` | プロキシリスト、1 行に 1 つの出口 (または環境変数 `ZHIPU_PROXIES`) — オプション |
-| `--tries N` | 諦める前にアカウントごとに試す出口の数 (デフォルト `2`) |
+| `--exits N` | 諦める前にアカウントごとに試す出口の数 (デフォルト `6`) |
 | `--timeout MS` | リクエストごとのタイムアウト (デフォルト `60000`) |
 | `--verify-only` | `keys.txt` のすべてのキーをゲートで再実行 |
 | `--screen` | プロキシリストを BigModel に対してのみテスト |

@@ -36,13 +36,13 @@
  *   --model <id>     free model used for the live gate         [glm-4.5-flash]
  *   --token-cmd CMD  TCaptcha solver command. Placeholders: {exit} {url} {tmp}.
  *                    It must print `{ticket,randstr}` JSON on stdout or write it
- *                    to the path in --token-file.  [required to mint]
+ *                    to the path in --token-file.  [optional; embedded solver is default]
  *   --token-file F   file the solver writes the ticket JSON to, when it does not
  *                    print it ({tmp} in --token-cmd expands to this path's dir)
  *   --appid ID       TCaptcha appid handed to the solver               [196026326]
  *   --mail <rail>    emailnator | broker | temptf                     [emailnator]
  *   --pool <file>    proxy list, one exit per line (env ZHIPU_PROXIES) [optional]
- *   --tries N        exits tried per account before giving up             [2]
+ *   --exits N        exits tried per account before giving up             [6]
  *   --timeout MS     per-request timeout                               [60000]
  *   --verify-only    re-run every key in keys.txt through the gate
  *   --screen         only test the proxy list against BigModel
@@ -73,6 +73,11 @@ const EMAILNATOR = 'https://www.emailnator.com';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
 
+// Shared/disposable boxes carry other tenants' mail: only a message that names
+// this panel may supply the code (measured 2026-10-24: dddai read a stranger's
+// code from a shared box). Override: --brand / ZHIPU_BRAND_RE.
+let BRAND = new RegExp(process.env.ZHIPU_BRAND_RE || 'zhipu|bigmodel', 'i');
+
 // ------------------------------------------------------------------- options
 const argv = process.argv.slice(2);
 function arg(name, dflt) {
@@ -97,6 +102,8 @@ if (has('help') || has('h')) {
   --auto         solve the TCaptcha with the embedded solver (default)
   --no-auto      disable the embedded solver
   --dry          resolve the plan, write nothing (no network, no files)
+  --appid ID     TCaptcha appid, used as the widget sitekey  [196026326]
+  --brand RE     sender/subject fence for the code mail (env ZHIPU_BRAND_RE)
 Advanced TCaptcha solver wiring (env-only) is described in ADVANCED.md; if Chrome
 is not found, install it once or point CHROME_PATH at it. Requests go through
 your proxy list when one is provided (--pool / env); without a pool the tool
@@ -107,10 +114,10 @@ connects directly.`);
 const COUNT = Math.max(1, parseInt(arg('count', '5'), 10) || 5);
 const CONC = Math.min(8, Math.max(1, parseInt(arg('conc', '1'), 10) || 1));
 const GAP_MS = Math.max(0, parseInt(arg('gap', '1200'), 10) || 0);
-const TRIES = Math.max(1, parseInt(arg('tries', '2'), 10) || 2);
+const EXITS = Math.max(1, parseInt(arg('exits', '6'), 10) || 6);
 const TIMEOUT_MS = Math.max(5000, parseInt(arg('timeout', '60000'), 10) || 60000);
 const MODEL = arg('model', 'glm-4.5-flash');
-const APPID = arg('appid', '196026326');
+const APPID = arg('appid', process.env.ZHIPU_CAPTCHA_APPID || '196026326');
 const TOKEN_CMD = arg('token-cmd', '');
 const TOKEN_FILE = arg('token-file', '');
 const MAIL = arg('mail', 'emailnator');
@@ -118,6 +125,7 @@ const VERIFY_ONLY = has('verify-only');
 const SCREEN = has('screen');
 const AUTO = !has('no-auto'); // the embedded solver is the default path (one command)
 const DRY = has('dry'); // resolve the plan, write nothing, send nothing
+if (arg('brand')) BRAND = new RegExp(arg('brand'), 'i'); // --brand overrides the mail fence
 /** Lazy require: a checkout without src/solver.js still runs off --token-cmd. */
 let _solver = null;
 const solver = () => (_solver && _solver.solveCaptcha ? _solver : (_solver = require('./solver.js')));
@@ -144,7 +152,7 @@ function parseProxy(line) {
 
 function directConnect(host, port, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const sock = net.connect({ host, port });
+    const sock = net.connect({ host, port, family: 4 }); // CN hosts publish broken AAAA; happy-eyeballs ETIMEDOUTs
     const t = setTimeout(() => { sock.destroy(); reject(new Error(`connect timeout (${host}:${port})`)); }, timeoutMs);
     sock.once('error', (e) => { clearTimeout(t); try { sock.destroy(); } catch {} reject(new Error(`connect failed: ${e.message}`)); });
     sock.once('connect', () => { clearTimeout(t); resolve(sock); });
@@ -274,6 +282,15 @@ function loadExits() {
   }
   return exits;
 }
+/** A dead exit, not a panel verdict — the flow rotates to the next candidate. */
+const isExitError = (e) =>
+  /proxy connect failed|proxy CONNECT refused|proxy timeout|connect timeout|connect failed|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ECONNABORTED|EPIPE|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|socket hang up|secureConnect|TLS|handshake/i.test(
+    String((e && e.message) || e),
+  );
+
+/** `host:port` of the exit in play, or `direct` when the pool is empty. */
+const exitLabel = (e) => (e ? `${e.host}:${e.port}` : 'direct');
+
 
 async function screen(exits) {
   let ok = 0;
@@ -303,7 +320,8 @@ async function newMailbox(exit) {
     return { rail: 'broker', address: j.address, token: j.token };
   }
   if (MAIL === 'temptf') {
-    const { TempTf } = require(path.join(ROOT, '..', '..', 'river-bulk-apikey', 'src', 'temptf.js'));
+    // Vendored: src/vendor/{temptf,proxy,mailtrap}.js ship inside this repo.
+    const { TempTf } = require(path.join(__dirname, 'vendor', 'temptf.js'));
     const tf = new TempTf({ log: () => {} });
     await tf.createAccount();
     return { rail: 'temptf', address: tf.address, tf };
@@ -321,9 +339,31 @@ async function newMailbox(exit) {
 
 const CODE_WINDOW_MS = 240000;
 
-async function waitCode(exit, box, { timeoutMs = CODE_WINDOW_MS, pollMs = 5000 } = {}) {
+/**
+ * Ids already in the box, taken BEFORE the code is requested: the emailnator
+ * gmail pool is shared and recycled, so a mail that was already there belongs to
+ * another tenant (its code comes back as "incorrect or expired"). A failed
+ * snapshot is not an empty box — it throws.
+ */
+async function inboxIds(exit, address) {
+  let last = null;
+  for (let k = 0; k < 4; k++) {
+    try {
+      const r = await exitJson(exit, `${EMAILNATOR}/api/message-list`, { method: 'POST', body: { email: address, limit: 20 } });
+      const msgs = r.json && r.json.messages;
+      if (Array.isArray(msgs)) return new Set(msgs.map((m) => String((m && m.id) || '')).filter(Boolean));
+      last = new Error(`message-list ${r.status}`);
+    } catch (e) {
+      last = e;
+    }
+    await sleep(4000);
+  }
+  throw new Error(`emailnator snapshot failed: ${String((last && last.message) || last).slice(0, 90)}`);
+}
+
+async function waitCode(exit, box, { timeoutMs = CODE_WINDOW_MS, pollMs = 5000, seenIds = [] } = {}) {
   const deadline = Date.now() + timeoutMs;
-  const seen = new Set();
+  const seen = new Set(seenIds.map(String));
   while (Date.now() < deadline) {
     let msgs = [];
     try {
@@ -335,6 +375,7 @@ async function waitCode(exit, box, { timeoutMs = CODE_WINDOW_MS, pollMs = 5000 }
           if (seen.has(m.id)) continue;
           seen.add(m.id);
           const rd = await fetch(`http://127.0.0.1:${arg('broker-port', '9700')}/read?id=${encodeURIComponent(m.id)}&token=${encodeURIComponent(box.token)}`).then((x) => x.json()).catch(() => null);
+          if (!BRAND.test(`${m.from || ''} ${(rd && rd.subject) || m.subject || ''}`)) continue; // the panel's own mail only
           const text = rd ? `${rd.subject || ''} ${rd.text || ''} ${rd.html || ''}` : '';
           const code = codeIn(text);
           if (code) return { code, subject: (rd && rd.subject) || m.subject || '' };
@@ -351,8 +392,9 @@ async function waitCode(exit, box, { timeoutMs = CODE_WINDOW_MS, pollMs = 5000 }
         for (const m of msgs) {
           if (seen.has(m.id)) continue;
           seen.add(m.id);
+          if (!BRAND.test(`${m.from || ''} ${m.subject || ''}`)) continue; // the panel's own mail only
           const rd = await exitJson(exit, `${EMAILNATOR}/api/message/${encodeURIComponent(m.id)}`).catch(() => null);
-          const code = rd ? codeIn(rd.text) : null;
+          const code = rd ? codeIn(`${rd.content || rd.html || rd.text || ''} ${rd.subject || ''}`) : null;
           if (code) return { code, subject: m.subject || '' };
         }
       }
@@ -363,7 +405,7 @@ async function waitCode(exit, box, { timeoutMs = CODE_WINDOW_MS, pollMs = 5000 }
 }
 
 function codeIn(text) {
-  const blob = String(text || '').replace(/<[^>]+>/g, ' ');
+  const blob = String(text || '').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ');
   const m = blob.match(/验证码[^\d]{0,24}(\d{4,8})/) || blob.match(/(?:code|verification)[^\d]{0,24}(\d{4,8})/i) || blob.match(/\b(\d{6})\b/);
   return m ? m[1] : null;
 }
@@ -371,7 +413,7 @@ function codeIn(text) {
 // ------------------------------------------------------------------- captcha
 /** The embedded TCaptcha rail (--auto): a ticket/randstr pair straight from the panel's appid. */
 async function autoTicket(exit) {
-  const r = await solver().solveCaptcha({ type: 'tencent', url: `${BASE}/login`, proxy: exit ? exit.line : null, appid: APPID });
+  const r = await solver().solveCaptcha({ type: 'tencent', sitekey: APPID, url: `${BASE}/login`, proxy: exit ? exit.line : null });
   if (r && r.ticket && r.randstr) return { ticket: String(r.ticket), randstr: String(r.randstr) };
   throw new Error('the embedded TCaptcha solver (--auto) produced no ticket');
 }
@@ -428,6 +470,8 @@ function saveAccounts(list) { fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(lis
 async function signUp(exit) {
   const box = await newMailbox(exit);
   log(`  box ${box.address} (${box.rail})`);
+  // Snapshot BEFORE the code is requested: shared box, so only newer ids count.
+  const seenIds = box.rail === 'emailnator' ? [...(await inboxIds(exit, box.address))] : [];
   const { ticket, randstr } = await tencentTicket(exit);
   log(`  tc-ticket ${ticket.length}c`);
   const send = await exitJson(exit, `${BASE}/api/biz/code/emailCode/TencentVerifyCaptcha`, {
@@ -436,7 +480,7 @@ async function signUp(exit) {
   });
   if (!(send.json && send.json.success)) throw new Error(`sendCode ${send.status}: ${String(send.text).slice(0, 160)}`);
   log(`  code sent → ${String(send.text).slice(0, 80)}`);
-  const { code, subject } = await waitCode(exit, box);
+  const { code, subject } = await waitCode(exit, box, { seenIds });
   log(`  code ${code} «${String(subject).slice(0, 40)}»`);
   const login = await exitJson(exit, `${BASE}/api/auth/login`, {
     method: 'POST',
@@ -498,16 +542,20 @@ async function mint() {
   }
   if (SCREEN) return void (await screen(exits));
   const accounts = loadAccounts();
-  log(`zhipu · ${COUNT} key(s) · conc ${CONC} · mail ${MAIL} · exits ${exits.filter(Boolean).length || 'direct'} · keys land in keys.txt`);
+  const routes = exits[0] === null ? 1 : EXITS;
+  log(`zhipu · ${COUNT} key(s) · conc ${CONC} · mail ${MAIL} · exits ${exits.filter(Boolean).length || 'direct'} · up to ${routes} per account · keys land in keys.txt`);
   let made = 0;
+  let transportDead = 0;
   for (let round = 0; round < COUNT; round += CONC) {
     const jobs = [];
     for (let k = 0; k < CONC && round + k < COUNT; k++) {
       const i = round + k;
       jobs.push((async () => {
         let lastErr = null;
-        for (let t2 = 0; t2 < TRIES; t2++) {
-          const exit = exits[(i + t2) % exits.length];
+        let lastWasExit = false;
+        for (let a = 0; a < routes; a++) {
+          const exit = exits[(i + a) % exits.length];
+          lastWasExit = false;
           try {
             const rec = await signUp(exit);
             if (!rec.key) { lastErr = new Error(`no key material (create ${rec.createStatus}: ${rec.createBody})`); continue; }
@@ -524,13 +572,26 @@ async function mint() {
             made++;
             log(`account ${i + 1} ✔ chat-200 ${MODEL} · tools=${g.tools ? (g.tools.present ? g.tools.names.join('+') : 'none') : '-'} · ${rec.key.slice(0, 8)}…`);
             return;
-          } catch (e) { lastErr = e; }
+          } catch (e) {
+            lastErr = e;
+            lastWasExit = isExitError(e);
+            if (lastWasExit) {
+              const where = exit ? `exit ${a + 1}/${routes} ${exitLabel(exit)}` : `direct attempt ${a + 1}/${routes}`;
+              log(`account ${i + 1}: ${where} dead (${String(e.message).slice(0, 70)})${exit ? ' → next exit' : ''}`);
+            }
+          }
         }
+        if (lastWasExit) transportDead++;
         log(`account ${i + 1}: ${lastErr ? String(lastErr.message).slice(0, 160) : 'failed'}`);
       })());
     }
     await Promise.all(jobs);
     if (GAP_MS) await sleep(GAP_MS);
+  }
+  if (!made && transportDead === COUNT) {
+    const route = exits[0] === null ? 'direct mode (no proxy list)' : `${exits.length}-exit pool`;
+    console.error(`[fatal] no usable route — ${COUNT} account(s) × ${routes} candidate(s) over ${route}: every attempt died at the transport layer.`);
+    process.exit(1);
   }
   log(`done — ${made}/${COUNT} key(s) written to ${KEYS_FILE}`);
   console.log(`__MINT_SUMMARY__ ${JSON.stringify({ requested: COUNT, live: made, keysFile: KEYS_FILE, deadFile: DEAD_FILE })}`);
